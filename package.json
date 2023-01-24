@@ -12,7 +12,8 @@
   },
   "license": "MIT",
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "preversion": "git pull --rebase && yarn && yarn test"
   },
   "keywords": [
     "node",
