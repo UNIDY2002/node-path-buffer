@@ -61,7 +61,7 @@ function isWindowsDeviceRoot(code) {
 
 // Resolves . and .. elements in a path with directory names
 function normalizeString(path, allowAboveRoot, separator, isPathSeparator) {
-  let res = '';
+  let res = typeof path === 'string' ? '' : Buffer.from('');
   let lastSegmentLength = 0;
   let lastSlash = -1;
   let dots = 0;
@@ -84,7 +84,7 @@ function normalizeString(path, allowAboveRoot, separator, isPathSeparator) {
           if (res.length > 2) {
             const lastSlashIndex = StringPrototypeLastIndexOf(res, separator);
             if (lastSlashIndex === -1) {
-              res = '';
+              res = typeof path === 'string' ? '' : Buffer.from('');
               lastSegmentLength = 0;
             } else {
               res = StringPrototypeSlice(res, 0, lastSlashIndex);
@@ -95,7 +95,7 @@ function normalizeString(path, allowAboveRoot, separator, isPathSeparator) {
             dots = 0;
             continue;
           } else if (res.length !== 0) {
-            res = '';
+            res = typeof path === 'string' ? '' : Buffer.from('');
             lastSegmentLength = 0;
             lastSlash = i;
             dots = 0;
@@ -103,14 +103,21 @@ function normalizeString(path, allowAboveRoot, separator, isPathSeparator) {
           }
         }
         if (allowAboveRoot) {
-          res += res.length > 0 ? `${separator}..` : '..';
+          if (typeof path === 'string')
+            res += res.length > 0 ? `${separator}..` : '..';
+          else
+            res = Buffer.concat([res, Buffer.from(res.length > 0 ? `${separator}..` : '..')]);
           lastSegmentLength = 2;
         }
       } else {
-        if (res.length > 0)
-          res += `${separator}${StringPrototypeSlice(path, lastSlash + 1, i)}`;
-        else
+        if (res.length > 0) {
+          if (typeof path === 'string')
+            res += `${separator}${StringPrototypeSlice(path, lastSlash + 1, i)}`;
+          else
+            res = Buffer.concat([res, Buffer.from(separator), StringPrototypeSlice(path, lastSlash + 1, i)]);
+        } else {
           res = StringPrototypeSlice(path, lastSlash + 1, i);
+        }
         lastSegmentLength = i - lastSlash - 1;
       }
       lastSlash = i;
@@ -127,12 +134,13 @@ function normalizeString(path, allowAboveRoot, separator, isPathSeparator) {
 const win32 = {
   /**
    * path.resolve([from ...], to)
-   * @param {...string} args
-   * @returns {string}
+   * @param {...string | Buffer} args
+   * @returns {string | Buffer}
    */
   resolve(...args) {
-    let resolvedDevice = '';
-    let resolvedTail = '';
+    const bufferMode = args.length > 0 && typeof args[0] !== 'string';
+    let resolvedDevice = bufferMode ? Buffer.from('') : '';
+    let resolvedTail = bufferMode ? Buffer.from('') : '';
     let resolvedAbsolute = false;
 
     for (let i = args.length - 1; i >= -1; i--) {
@@ -146,7 +154,7 @@ const win32 = {
           continue;
         }
       } else if (resolvedDevice.length === 0) {
-        path = process.cwd();
+        path = bufferMode ? Buffer.from(process.cwd()) : process.cwd();
       } else {
         // Windows has the concept of drive-specific current working
         // directories. If we've resolved a drive letter but not yet an
@@ -154,20 +162,34 @@ const win32 = {
         // the drive cwd is not available. We're sure the device is not
         // a UNC path at this points, because UNC paths are always absolute.
         path = process.env[`=${resolvedDevice}`] || process.cwd();
+        if (bufferMode) {
+          path = Buffer.from(path);
+        }
 
         // Verify that a cwd was found and that it actually points
         // to our drive. If not, default to the drive's root.
-        if (path === undefined ||
-            (StringPrototypeToLowerCase(StringPrototypeSlice(path, 0, 2)) !==
-            StringPrototypeToLowerCase(resolvedDevice) &&
-            StringPrototypeCharCodeAt(path, 2) === CHAR_BACKWARD_SLASH)) {
-          path = `${resolvedDevice}\\`;
+        if (bufferMode) {
+          if (path === undefined ||
+              (Buffer.compare(
+                  StringPrototypeToLowerCase(StringPrototypeSlice(path, 0, 2)),
+                  StringPrototypeToLowerCase(resolvedDevice),
+                ) !== 0 &&
+                StringPrototypeCharCodeAt(path, 2) === CHAR_BACKWARD_SLASH)) {
+            path = Buffer.concat([resolvedDevice, Buffer.from('\\')]);
+          }
+        } else {
+          if (path === undefined ||
+              (StringPrototypeToLowerCase(StringPrototypeSlice(path, 0, 2)) !==
+                  StringPrototypeToLowerCase(resolvedDevice) &&
+                  StringPrototypeCharCodeAt(path, 2) === CHAR_BACKWARD_SLASH)) {
+            path = `${resolvedDevice}\\`;
+          }
         }
       }
 
       const len = path.length;
       let rootEnd = 0;
-      let device = '';
+      let device = bufferMode ? Buffer.from('') : '';
       let isAbsolute = false;
       const code = StringPrototypeCharCodeAt(path, 0);
 
@@ -213,8 +235,16 @@ const win32 = {
               }
               if (j === len || j !== last) {
                 // We matched a UNC root
-                device =
-                  `\\\\${firstPart}\\${StringPrototypeSlice(path, last, j)}`;
+                if (bufferMode)
+                  device = Buffer.concat([
+                    Buffer.from('\\\\'),
+                    firstPart,
+                    Buffer.from('\\'),
+                    StringPrototypeSlice(path, last, j),
+                  ]);
+                else
+                  device =
+                    `\\\\${firstPart}\\${StringPrototypeSlice(path, last, j)}`;
                 rootEnd = j;
               }
             }
@@ -237,8 +267,11 @@ const win32 = {
 
       if (device.length > 0) {
         if (resolvedDevice.length > 0) {
-          if (StringPrototypeToLowerCase(device) !==
-              StringPrototypeToLowerCase(resolvedDevice))
+          if ((bufferMode &&
+              Buffer.compare(StringPrototypeToLowerCase(device), StringPrototypeToLowerCase(resolvedDevice)) !== 0) ||
+              (!bufferMode &&
+                StringPrototypeToLowerCase(device) !==
+                StringPrototypeToLowerCase(resolvedDevice)))
             // This path points to another device so it is not applicable
             continue;
         } else {
@@ -250,8 +283,13 @@ const win32 = {
         if (resolvedDevice.length > 0)
           break;
       } else {
-        resolvedTail =
-          `${StringPrototypeSlice(path, rootEnd)}\\${resolvedTail}`;
+        if (bufferMode) {
+          resolvedTail =
+              Buffer.concat([StringPrototypeSlice(path, rootEnd), Buffer.from('\\'), resolvedTail]);
+        } else {
+          resolvedTail =
+              `${StringPrototypeSlice(path, rootEnd)}\\${resolvedTail}`;
+        }
         resolvedAbsolute = isAbsolute;
         if (isAbsolute && resolvedDevice.length > 0) {
           break;
@@ -267,20 +305,28 @@ const win32 = {
     resolvedTail = normalizeString(resolvedTail, !resolvedAbsolute, '\\',
                                    isPathSeparator);
 
+    if (bufferMode) {
+      if (resolvedAbsolute) {
+        return Buffer.concat([resolvedDevice, Buffer.from('\\'), resolvedTail]);
+      } else {
+        const result = Buffer.concat([resolvedDevice, resolvedTail]);
+        return result.length > 0 ? result : Buffer.from('.');
+      }
+    }
     return resolvedAbsolute ?
       `${resolvedDevice}\\${resolvedTail}` :
       `${resolvedDevice}${resolvedTail}` || '.';
   },
 
   /**
-   * @param {string} path
-   * @returns {string}
+   * @param {string | Buffer} path
+   * @returns {string | Buffer}
    */
   normalize(path) {
     validateString(path, 'path');
     const len = path.length;
     if (len === 0)
-      return '.';
+      return typeof path === 'string' ? '.' : Buffer.from('.');
     let rootEnd = 0;
     let device;
     let isAbsolute = false;
@@ -290,7 +336,7 @@ const win32 = {
     if (len === 1) {
       // `path` contains just a single char, exit early to avoid
       // unnecessary work
-      return isPosixPathSeparator(code) ? '\\' : path;
+      return isPosixPathSeparator(code) ? (typeof path === 'string' ? '\\' : Buffer.from('\\')) : path;
     }
     if (isPathSeparator(code)) {
       // Possible UNC root
@@ -329,12 +375,29 @@ const win32 = {
               // We matched a UNC root only
               // Return the normalized version of the UNC root since there
               // is nothing left to process
-              return `\\\\${firstPart}\\${StringPrototypeSlice(path, last)}\\`;
+              if (typeof path === 'string')
+                return `\\\\${firstPart}\\${StringPrototypeSlice(path, last)}\\`;
+              else
+                return Buffer.concat([
+                  Buffer.from('\\\\'),
+                  firstPart,
+                  Buffer.from('\\'),
+                  StringPrototypeSlice(path, last),
+                  Buffer.from('\\'),
+                ]);
             }
             if (j !== last) {
               // We matched a UNC root with leftovers
-              device =
-                `\\\\${firstPart}\\${StringPrototypeSlice(path, last, j)}`;
+              if (typeof path === 'string')
+                device =
+                  `\\\\${firstPart}\\${StringPrototypeSlice(path, last, j)}`;
+              else
+                device = Buffer.concat([
+                  Buffer.from('\\\\'),
+                  firstPart,
+                  Buffer.from('\\'),
+                  StringPrototypeSlice(path, last, j),
+                ]);
               rootEnd = j;
             }
           }
@@ -358,20 +421,31 @@ const win32 = {
     let tail = rootEnd < len ?
       normalizeString(StringPrototypeSlice(path, rootEnd),
                       !isAbsolute, '\\', isPathSeparator) :
-      '';
+      typeof path === 'string' ? '' : Buffer.from('');
     if (tail.length === 0 && !isAbsolute)
-      tail = '.';
+      tail = typeof path === 'string' ? '.' : Buffer.from('.');
     if (tail.length > 0 &&
-        isPathSeparator(StringPrototypeCharCodeAt(path, len - 1)))
-      tail += '\\';
-    if (device === undefined) {
-      return isAbsolute ? `\\${tail}` : tail;
+        isPathSeparator(StringPrototypeCharCodeAt(path, len - 1))) {
+      if (typeof tail === 'string')
+        tail += '\\';
+      else
+        tail = Buffer.concat([tail, Buffer.from('\\')]);
     }
-    return isAbsolute ? `${device}\\${tail}` : `${device}${tail}`;
+    if (device === undefined) {
+      return isAbsolute ?
+          (typeof tail === 'string' ? `\\${tail}` : Buffer.concat([Buffer.from('\\'), tail])) :
+          tail;
+    }
+    if (typeof tail === 'string')
+      return isAbsolute ? `${device}\\${tail}` : `${device}${tail}`;
+    else
+      return isAbsolute ?
+          Buffer.concat([device, Buffer.from('\\'), tail]) :
+          Buffer.concat([device, tail]);
   },
 
   /**
-   * @param {string} path
+   * @param {string | Buffer} path
    * @returns {boolean}
    */
   isAbsolute(path) {
@@ -390,13 +464,14 @@ const win32 = {
   },
 
   /**
-   * @param {...string} args
-   * @returns {string}
+   * @param {...string | Buffer} args
+   * @returns {string | Buffer}
    */
   join(...args) {
     if (args.length === 0)
       return '.';
 
+    const bufferMode = typeof args[0] !== 'string';
     let joined;
     let firstPart;
     for (let i = 0; i < args.length; ++i) {
@@ -405,13 +480,15 @@ const win32 = {
       if (arg.length > 0) {
         if (joined === undefined)
           joined = firstPart = arg;
+        else if (bufferMode)
+          joined = Buffer.concat([joined, Buffer.from('\\'), arg]);
         else
           joined += `\\${arg}`;
       }
     }
 
     if (joined === undefined)
-      return '.';
+      return bufferMode ? Buffer.from('.') : '.';
 
     // Make sure that the joined path doesn't start with two slashes, because
     // normalize() will mistake it for a UNC path then.
@@ -453,7 +530,9 @@ const win32 = {
 
       // Replace the slashes if needed
       if (slashCount >= 2)
-        joined = `\\${StringPrototypeSlice(joined, slashCount)}`;
+        joined = bufferMode ?
+            Buffer.concat([Buffer.from('\\'), StringPrototypeSlice(joined, slashCount)]) :
+            `\\${StringPrototypeSlice(joined, slashCount)}`;
     }
 
     return win32.normalize(joined);
@@ -464,28 +543,34 @@ const win32 = {
    * from = 'C:\\orandea\\test\\aaa'
    * to = 'C:\\orandea\\impl\\bbb'
    * The output of the function should be: '..\\..\\impl\\bbb'
-   * @param {string} from
-   * @param {string} to
-   * @returns {string}
+   * @param {string | Buffer} from
+   * @param {string | Buffer} to
+   * @returns {string | Buffer}
    */
   relative(from, to) {
     validateString(from, 'from');
     validateString(to, 'to');
 
-    if (from === to)
+    if (typeof from === 'string' && from === to)
       return '';
+    if (typeof from !== 'string' && Buffer.compare(from, to) === 0)
+      return Buffer.from('');
 
     const fromOrig = win32.resolve(from);
     const toOrig = win32.resolve(to);
 
-    if (fromOrig === toOrig)
+    if (typeof from === 'string' && fromOrig === toOrig)
       return '';
+    if (typeof from !== 'string' && Buffer.compare(fromOrig, toOrig) === 0)
+      return Buffer.from('');
 
     from = StringPrototypeToLowerCase(fromOrig);
     to = StringPrototypeToLowerCase(toOrig);
 
-    if (from === to)
+    if (typeof from === 'string' && from === to)
       return '';
+    if (typeof from !== 'string' && Buffer.compare(from, to) === 0)
+      return Buffer.from('');
 
     // Trim any leading backslashes
     let fromStart = 0;
@@ -578,8 +663,12 @@ const win32 = {
 
     // Lastly, append the rest of the destination (`to`) path that comes after
     // the common path parts
-    if (out.length > 0)
-      return `${out}${StringPrototypeSlice(toOrig, toStart, toEnd)}`;
+    if (out.length > 0) {
+      if (typeof from === 'string')
+        return `${out}${StringPrototypeSlice(toOrig, toStart, toEnd)}`;
+      else
+        return Buffer.concat([Buffer.from(out), StringPrototypeSlice(toOrig, toStart, toEnd)]);
+    }
 
     if (StringPrototypeCharCodeAt(toOrig, toStart) === CHAR_BACKWARD_SLASH)
       ++toStart;
@@ -587,14 +676,14 @@ const win32 = {
   },
 
   /**
-   * @param {string} path
-   * @returns {string}
+   * @param {string | Buffer} path
+   * @returns {string | Buffer}
    */
   dirname(path) {
     validateString(path, 'path');
     const len = path.length;
     if (len === 0)
-      return '.';
+      return typeof path === 'string' ? '.' : Buffer.from('.');
     let rootEnd = -1;
     let offset = 0;
     const code = StringPrototypeCharCodeAt(path, 0);
@@ -602,7 +691,7 @@ const win32 = {
     if (len === 1) {
       // `path` contains just a path separator, exit early to avoid
       // unnecessary work or a dot.
-      return isPathSeparator(code) ? path : '.';
+      return isPathSeparator(code) ? path : typeof path === 'string' ? '.' : Buffer.from('.');
     }
 
     // Try to match a root
@@ -674,7 +763,7 @@ const win32 = {
 
     if (end === -1) {
       if (rootEnd === -1)
-        return '.';
+        return typeof path === 'string' ? '.' : Buffer.from('.');
 
       end = rootEnd;
     }
@@ -682,9 +771,9 @@ const win32 = {
   },
 
   /**
-   * @param {string} path
+   * @param {string | Buffer} path
    * @param {string} [suffix]
-   * @returns {string}
+   * @returns {string | Buffer}
    */
   basename(path, suffix) {
     if (suffix !== undefined)
@@ -704,8 +793,8 @@ const win32 = {
     }
 
     if (suffix !== undefined && suffix.length > 0 && suffix.length <= path.length) {
-      if (suffix === path)
-        return '';
+      if (suffix === path.toString())
+        return typeof path === 'string' ? '' : Buffer.from('');
       let extIdx = suffix.length - 1;
       let firstNonSlashEnd = -1;
       for (let i = path.length - 1; i >= start; --i) {
@@ -765,13 +854,13 @@ const win32 = {
     }
 
     if (end === -1)
-      return '';
+      return typeof path === 'string' ? '' : Buffer.from('');
     return StringPrototypeSlice(path, start, end);
   },
 
   /**
-   * @param {string} path
-   * @returns {string}
+   * @param {string | Buffer} path
+   * @returns {string | Buffer}
    */
   extname(path) {
     validateString(path, 'path');
@@ -832,7 +921,7 @@ const win32 = {
         (preDotState === 1 &&
          startDot === end - 1 &&
          startDot === startPart + 1)) {
-      return '';
+      return typeof path === 'string' ? '' : Buffer.from('');
     }
     return StringPrototypeSlice(path, startDot, end);
   },
@@ -861,15 +950,16 @@ const posixCwd = (() => {
 const posix = {
   /**
    * path.resolve([from ...], to)
-   * @param {...string} args
-   * @returns {string}
+   * @param {...string | Buffer} args
+   * @returns {string | Buffer}
    */
   resolve(...args) {
-    let resolvedPath = '';
+    const bufferMode = args.length > 0 && typeof args[0] !== 'string';
+    let resolvedPath = bufferMode ? Buffer.from('') : '';
     let resolvedAbsolute = false;
 
     for (let i = args.length - 1; i >= -1 && !resolvedAbsolute; i--) {
-      const path = i >= 0 ? args[i] : posixCwd();
+      const path = i >= 0 ? args[i] : bufferMode ? Buffer.from(posixCwd()) : posixCwd();
 
       validateString(path, 'path');
 
@@ -878,7 +968,10 @@ const posix = {
         continue;
       }
 
-      resolvedPath = `${path}/${resolvedPath}`;
+      if (bufferMode)
+        resolvedPath = Buffer.concat([path, Buffer.from('/'), resolvedPath]);
+      else
+        resolvedPath = `${path}/${resolvedPath}`;
       resolvedAbsolute =
         StringPrototypeCharCodeAt(path, 0) === CHAR_FORWARD_SLASH;
     }
@@ -891,20 +984,20 @@ const posix = {
                                    isPosixPathSeparator);
 
     if (resolvedAbsolute) {
-      return `/${resolvedPath}`;
+      return bufferMode ? Buffer.concat([Buffer.from('/'), resolvedPath]) : `/${resolvedPath}`;
     }
-    return resolvedPath.length > 0 ? resolvedPath : '.';
+    return resolvedPath.length > 0 ? resolvedPath : bufferMode ? Buffer.from('.') : '.';
   },
 
   /**
-   * @param {string} path
-   * @returns {string}
+   * @param {string | Buffer} path
+   * @returns {string | Buffer}
    */
   normalize(path) {
     validateString(path, 'path');
 
     if (path.length === 0)
-      return '.';
+      return typeof path === 'string' ? '.' : Buffer.from('.');
 
     const isAbsolute =
       StringPrototypeCharCodeAt(path, 0) === CHAR_FORWARD_SLASH;
@@ -916,17 +1009,25 @@ const posix = {
 
     if (path.length === 0) {
       if (isAbsolute)
-        return '/';
-      return trailingSeparator ? './' : '.';
+        return typeof path === 'string' ? '/' : Buffer.from('/');
+      return typeof path === 'string' ?
+          (trailingSeparator ? './' : '.') :
+          Buffer.from(trailingSeparator ? './' : '.');
     }
-    if (trailingSeparator)
-      path += '/';
+    if (trailingSeparator) {
+      if (typeof path === 'string')
+        path += '/';
+      else
+        path = Buffer.concat([path, Buffer.from('/')]);
+    }
 
-    return isAbsolute ? `/${path}` : path;
+    return isAbsolute ?
+        typeof path === 'string' ? `/${path}` : Buffer.concat([Buffer.from('/'), path])
+        : path;
   },
 
   /**
-   * @param {string} path
+   * @param {string | Buffer} path
    * @returns {boolean}
    */
   isAbsolute(path) {
@@ -936,12 +1037,13 @@ const posix = {
   },
 
   /**
-   * @param {...string} args
-   * @returns {string}
+   * @param {...string | Buffer} args
+   * @returns {string | Buffer}
    */
   join(...args) {
     if (args.length === 0)
       return '.';
+    const bufferMode = typeof args[0] !== 'string';
     let joined;
     for (let i = 0; i < args.length; ++i) {
       const arg = args[i];
@@ -949,33 +1051,39 @@ const posix = {
       if (arg.length > 0) {
         if (joined === undefined)
           joined = arg;
+        else if (bufferMode)
+          joined = Buffer.concat([joined, Buffer.from('/'), arg]);
         else
           joined += `/${arg}`;
       }
     }
     if (joined === undefined)
-      return '.';
+      return bufferMode ? Buffer.from('.') : '.';
     return posix.normalize(joined);
   },
 
   /**
-   * @param {string} from
-   * @param {string} to
-   * @returns {string}
+   * @param {string | Buffer} from
+   * @param {string | Buffer} to
+   * @returns {string | Buffer}
    */
   relative(from, to) {
     validateString(from, 'from');
     validateString(to, 'to');
 
-    if (from === to)
+    if (typeof from === 'string' && from === to)
       return '';
+    if (typeof from !== 'string' && Buffer.compare(from, to) === 0)
+      return Buffer.from('');
 
     // Trim leading forward slashes.
     from = posix.resolve(from);
     to = posix.resolve(to);
 
-    if (from === to)
+    if (typeof from === 'string' && from === to)
       return '';
+    if (typeof from !== 'string' && Buffer.compare(from, to) === 0)
+      return Buffer.from('');
 
     const fromStart = 1;
     const fromEnd = from.length;
@@ -1036,13 +1144,13 @@ const posix = {
   },
 
   /**
-   * @param {string} path
-   * @returns {string}
+   * @param {string | Buffer} path
+   * @returns {string | Buffer}
    */
   dirname(path) {
     validateString(path, 'path');
     if (path.length === 0)
-      return '.';
+      return typeof path === 'string' ? '.' : Buffer.from('.');
     const hasRoot = StringPrototypeCharCodeAt(path, 0) === CHAR_FORWARD_SLASH;
     let end = -1;
     let matchedSlash = true;
@@ -1059,16 +1167,16 @@ const posix = {
     }
 
     if (end === -1)
-      return hasRoot ? '/' : '.';
+      return typeof path === 'string' ? (hasRoot ? '/' : '.') : Buffer.from(hasRoot ? '/' : '.');
     if (hasRoot && end === 1)
-      return '//';
+      return typeof path === 'string' ? '//' : Buffer.from('//');
     return StringPrototypeSlice(path, 0, end);
   },
 
   /**
-   * @param {string} path
+   * @param {string | Buffer} path
    * @param {string} [suffix]
-   * @returns {string}
+   * @returns {string | Buffer}
    */
   basename(path, suffix) {
     if (suffix !== undefined)
@@ -1080,8 +1188,8 @@ const posix = {
     let matchedSlash = true;
 
     if (suffix !== undefined && suffix.length > 0 && suffix.length <= path.length) {
-      if (suffix === path)
-        return '';
+      if (suffix === path.toString())
+        return typeof path === 'string' ? '' : Buffer.from('');
       let extIdx = suffix.length - 1;
       let firstNonSlashEnd = -1;
       for (let i = path.length - 1; i >= 0; --i) {
@@ -1141,13 +1249,13 @@ const posix = {
     }
 
     if (end === -1)
-      return '';
+      return typeof path === 'string' ? '' : Buffer.from('');
     return StringPrototypeSlice(path, start, end);
   },
 
   /**
-   * @param {string} path
-   * @returns {string}
+   * @param {string | Buffer} path
+   * @returns {string | Buffer}
    */
   extname(path) {
     validateString(path, 'path');
@@ -1196,7 +1304,7 @@ const posix = {
         (preDotState === 1 &&
          startDot === end - 1 &&
          startDot === startPart + 1)) {
-      return '';
+      return typeof path === 'string' ? '' : Buffer.from('');
     }
     return StringPrototypeSlice(path, startDot, end);
   },
