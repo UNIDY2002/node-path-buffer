@@ -1,0 +1,26 @@
+{
+  "name": "node-path-buffer",
+  "version": "1.0.0",
+  "description": "Node.js path module with buffer support.",
+  "main": "index.js",
+  "files": [
+    "src/**/*"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/UNIDY2002/node-path-buffer"
+  },
+  "license": "MIT",
+  "scripts": {
+
+  },
+  "keywords": [
+    "node",
+    "nodejs",
+    "Node.js",
+    "path",
+    "buffer",
+    "Buffer"
+  ],
+  "author": "UNIDY2002 <UNIDY2002@outlook.com>"
+}
